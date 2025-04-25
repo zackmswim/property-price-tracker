@@ -10,5 +10,5 @@ jobs:
     steps:
       - name: Trigger Supabase Function
         run: |
-          curl -X POST "https://your-project-ref.supabase.co/functions/v1/weekly-price-update" \
+          curl -X POST "https://ugiektqwedzcupwxzxak.supabase.co/functions/v1/weekly-price-update" \
           -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}"  
