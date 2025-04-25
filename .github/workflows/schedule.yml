@@ -1,0 +1,14 @@
+name: Weekly Price Update
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Runs every Monday at 9 AM UTC
+  workflow_dispatch:       # Optional: Allows manual triggering
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Supabase Function
+        run: |
+          curl -X POST "https://your-project-ref.supabase.co/functions/v1/weekly-price-update" \
+          -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}"  

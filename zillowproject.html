@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zillow Map App</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+        }
+        #map {
+            height: 500px;
+            width: 100%;
+            margin-top: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #0073e6;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0058b3;
+        }
+        .listing {
+            padding: 10px;
+            margin: 5px 0;
+            background-color: #f5f5f5;
+            border-radius: 3px;
+        }
+        .listing a {
+            color: #0073e6;
+        }
+        .hidden {
+            display: none;
+        }
+        #listingsPanel {
+            margin-top: 20px;
+        }
+        #loading {
+            text-align: center;
+            margin: 20px 0;
+            display: none;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 15px;
+        }
+        .tab {
+            padding: 10px 15px;
+            cursor: pointer;
+            background: #eee;
+            margin-right: 5px;
+        }
+        .tab.active {
+            background: #0073e6;
+            color: white;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .custom-star-icon {
+            background: transparent !important;
+            border: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Property Listings Map</h1>
+        
+        <div class="tabs">
+            <div class="tab active" data-tab="addresses">Enter Addresses</div>
+            <div class="tab" data-tab="csv">Upload CSV</div>
+        </div>
+        
+        <div id="addresses" class="tab-content active">
+            <div class="form-group">
+                <label for="addressInput">Enter addresses (one per line):</label>
+                <textarea id="addressInput" placeholder="123 Main St, City, State&#10;456 Oak Ave, City, State"></textarea>
+            </div>
+            <button id="submitAddresses">Add to Map</button>
+        </div>
+        
+        <div id="csv" class="tab-content">
+            <div class="form-group">
+                <label for="csvFile">Upload CSV file:</label>
+                <input type="file" id="csvFile" accept=".csv">
+            </div>
+            <button id="submitCsv">Upload CSV</button>
+        </div>
+        
+        <div id="loading">
+            <p>Processing data... Please wait.</p>
+        </div>
+        
+        <div id="map"></div>
+        
+        <div id="listingsPanel">
+            <h2>Listings</h2>
+            <div id="listingsContainer"></div>
+        </div>
+        
+        <div id="nearbyPanel" class="hidden">
+            <h2>Nearby Listings (within 0.5 miles)</h2>
+            <div id="nearbyContainer"></div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let map;
+        let markers = [];
+        let listings = [];
+        
+        // Define icons
+        const defaultIcon = L.icon({
+            iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+            iconSize: [25, 41],
+            iconAnchor: [12, 41]
+        });
+
+        const starIcon = L.divIcon({
+            className: 'custom-star-icon',
+            html: '<i class="fa-solid fa-star" style="color: #FFD700; font-size: 24px;"></i>',
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+        });
+
+        // Initialize map
+        function initMap() {
+            map = L.map('map').setView([39.9526, -75.1652], 13);
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+        }
+        
+        // Tab functionality
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', function() {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                this.classList.add('active');
+                
+                document.querySelectorAll('.tab-content').forEach(content => {
+                    content.classList.remove('active');
+                });
+                
+                document.getElementById(this.dataset.tab).classList.add('active');
+            });
+        });
+        
+        // Handle form submission
+        document.getElementById('submitAddresses').addEventListener('click', function() {
+            const addresses = document.getElementById('addressInput').value.trim();
+            if (addresses) {
+                document.getElementById('loading').style.display = 'block';
+                processAddresses(addresses.split('\n'));
+            }
+        });
+        
+        // Handle CSV upload
+        document.getElementById('submitCsv').addEventListener('click', function() {
+            const fileInput = document.getElementById('csvFile');
+            if (fileInput.files.length > 0) {
+                document.getElementById('loading').style.display = 'block';
+                const file = fileInput.files[0];
+                parseCsvFile(file);
+            }
+        });
+        
+        // Process addresses
+        async function processAddresses(addressList) {
+            listings = [];
+            clearMarkers();
+            
+            for (const address of addressList) {
+                if (address.trim()) {
+                    try {
+                        const result = await geocodeAddress(address.trim());
+                        if (result) {
+                            listings.push({
+                                address: address.trim(),
+                                lat: result.lat,
+                                lng: result.lng,
+                                price: '',
+                                bedrooms: '',
+                                bathrooms: '',
+                                propertyType: '',
+                                parking: '',
+                                neighborhood: '',
+                                url: ''
+                            });
+                        }
+                    } catch (error) {
+                        console.error(`Error geocoding ${address}:`, error);
+                    }
+                }
+            }
+            
+            document.getElementById('loading').style.display = 'none';
+            updateListingsDisplay();
+            addMarkersToMap();
+        }
+        
+        // Parse CSV file
+        function parseCsvFile(file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const contents = e.target.result;
+                const rows = parseCSV(contents);
+                
+                if (rows.length > 0) {
+                    const headers = rows[0];
+                    const addressIndex = headers.findIndex(h => h.toLowerCase().includes('address'));
+                    const latIndex = headers.findIndex(h => h.toLowerCase().includes('latitude'));
+                    const lngIndex = headers.findIndex(h => h.toLowerCase().includes('longitude'));
+                    const priceIndex = headers.findIndex(h => h.toLowerCase().includes('cost') || h.toLowerCase().includes('price'));
+                    const bedroomsIndex = headers.findIndex(h => h.toLowerCase().includes('bedroom'));
+                    const bathroomsIndex = headers.findIndex(h => h.toLowerCase().includes('bathroom'));
+                    const propertyTypeIndex = headers.findIndex(h => h.toLowerCase().includes('property type'));
+                    const parkingIndex = headers.findIndex(h => h.toLowerCase().includes('parking'));
+                    const neighborhoodIndex = headers.findIndex(h => h.toLowerCase().includes('neighborhood'));
+                    const urlIndex = headers.findIndex(h => h.toLowerCase().includes('link') || h.toLowerCase().includes('url'));
+                    
+                    if (addressIndex === -1 || (latIndex === -1 && lngIndex === -1)) {
+                        alert('CSV file must contain "Address" column and either "Latitude" or "Longitude" columns');
+                        document.getElementById('loading').style.display = 'none';
+                        return;
+                    }
+                    
+                    const data = [];
+                    for (let i = 1; i < rows.length; i++) {
+                        if (rows[i].length > 0 && rows[i][0].trim()) {
+                            const item = {
+                                address: rows[i][addressIndex] ? rows[i][addressIndex].trim() : '',
+                                lat: latIndex !== -1 && rows[i][latIndex] ? parseFloat(rows[i][latIndex]) : null,
+                                lng: lngIndex !== -1 && rows[i][lngIndex] ? parseFloat(rows[i][lngIndex]) : null,
+                                price: priceIndex !== -1 && rows[i][priceIndex] ? rows[i][priceIndex].trim() : '',
+                                bedrooms: bedroomsIndex !== -1 && rows[i][bedroomsIndex] ? rows[i][bedroomsIndex].trim() : '',
+                                bathrooms: bathroomsIndex !== -1 && rows[i][bathroomsIndex] ? rows[i][bathroomsIndex].trim() : '',
+                                propertyType: propertyTypeIndex !== -1 && rows[i][propertyTypeIndex] ? rows[i][propertyTypeIndex].trim() : '',
+                                parking: parkingIndex !== -1 && rows[i][parkingIndex] ? rows[i][parkingIndex].trim() : '',
+                                neighborhood: neighborhoodIndex !== -1 && rows[i][neighborhoodIndex] ? rows[i][neighborhoodIndex].trim() : '',
+                                url: urlIndex !== -1 && rows[i][urlIndex] ? rows[i][urlIndex].trim() : ''
+                            };
+                            data.push(item);
+                        }
+                    }
+                    
+                    processCsvData(data);
+                }
+            };
+            reader.readAsText(file);
+        }
+        
+        // Parse CSV string
+        function parseCSV(text) {
+            const result = [];
+            let row = [];
+            let field = '';
+            let inQuote = false;
+            
+            for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                const nextChar = text[i + 1] || '';
+                
+                if (char === '"') {
+                    if (inQuote && nextChar === '"') {
+                        field += '"';
+                        i++;
+                    } else {
+                        inQuote = !inQuote;
+                    }
+                }
+                else if (char === ',' && !inQuote) {
+                    row.push(field);
+                    field = '';
+                }
+                else if ((char === '\n' || (char === '\r' && nextChar === '\n')) && !inQuote) {
+                    row.push(field);
+                    result.push(row);
+                    row = [];
+                    field = '';
+                    if (char === '\r') i++;
+                }
+                else {
+                    field += char;
+                }
+            }
+            
+            if (field) row.push(field);
+            if (row.length > 0) result.push(row);
+            
+            return result;
+        }
+        
+        // Process CSV data
+        async function processCsvData(data) {
+            listings = [];
+            clearMarkers();
+            
+            for (const item of data) {
+                if (item.lat && item.lng) {
+                    listings.push(item);
+                } 
+                else if (item.address) {
+                    try {
+                        const result = await geocodeAddress(item.address);
+                        if (result) {
+                            listings.push({
+                                ...item,
+                                lat: result.lat,
+                                lng: result.lng
+                            });
+                        }
+                    } catch (error) {
+                        console.error(`Error geocoding ${item.address}:`, error);
+                    }
+                }
+            }
+            
+            document.getElementById('loading').style.display = 'none';
+            updateListingsDisplay();
+            addMarkersToMap();
+        }
+        
+        // Geocode an address
+        async function geocodeAddress(address) {
+            try {
+                const encodedAddress = encodeURIComponent(address);
+                const response = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodedAddress}&format=json&limit=1`, {
+                    headers: {
+                        'User-Agent': 'ZillowMapApp/1.0'
+                    }
+                });
+                
+                const data = await response.json();
+                if (data && data.length > 0) {
+                    return {
+                        lat: parseFloat(data[0].lat),
+                        lng: parseFloat(data[0].lon)
+                    };
+                }
+                return null;
+            } catch (error) {
+                console.error('Geocoding error:', error);
+                return null;
+            }
+        }
+        
+        // Update listings display
+        function updateListingsDisplay() {
+            const container = document.getElementById('listingsContainer');
+            container.innerHTML = '';
+            
+            if (listings.length === 0) {
+                container.innerHTML = '<p>No listings found.</p>';
+                return;
+            }
+            
+            listings.forEach((listing, index) => {
+                const div = document.createElement('div');
+                div.className = 'listing';
+                
+                let html = `<strong>${listing.address}</strong>`;
+                
+                if (listing.price) html += `<br>Price: ${listing.price}`;
+                if (listing.bedrooms) html += `<br>Bedrooms: ${listing.bedrooms}`;
+                if (listing.bathrooms) html += `<br>Bathrooms: ${listing.bathrooms}`;
+                if (listing.propertyType) html += `<br>Type: ${listing.propertyType}`;
+                if (listing.neighborhood) html += `<br>Neighborhood: ${listing.neighborhood}`;
+                if (listing.url) html += `<br><a href="${listing.url}" target="_blank">View Listing</a>`;
+                
+                div.innerHTML = html;
+                div.addEventListener('click', () => {
+                    map.setView([listing.lat, listing.lng], 16);
+                    markers[index].openPopup();
+                    findNearbyListings(listing.lat, listing.lng, index);
+                });
+                
+                container.appendChild(div);
+            });
+        }
+        
+        // Add markers to map
+        function addMarkersToMap() {
+            clearMarkers();
+            
+            listings.forEach((listing, index) => {
+                const marker = L.marker([listing.lat, listing.lng], {
+                    icon: defaultIcon,
+                    opacity: 0.8
+                }).addTo(map);
+                
+                let popupContent = `<strong>${listing.address}</strong>`;
+                if (listing.price) popupContent += `<br>Price: ${listing.price}`;
+                if (listing.bedrooms) popupContent += `<br>Bedrooms: ${listing.bedrooms}`;
+                if (listing.bathrooms) popupContent += `<br>Bathrooms: ${listing.bathrooms}`;
+                if (listing.propertyType) popupContent += `<br>Type: ${listing.propertyType}`;
+                if (listing.neighborhood) popupContent += `<br>Neighborhood: ${listing.neighborhood}`;
+                if (listing.url) popupContent += `<br><a href="${listing.url}" target="_blank">View Listing</a>`;
+                
+                marker.bindPopup(popupContent);
+                
+                marker.on('click', function() {
+                    // Reset all markers first
+                    resetAllMarkers();
+                    
+                    // Highlight clicked marker
+                    this.setOpacity(1.0);
+                    
+                    // Find and highlight nearby markers
+                    findNearbyListings(listing.lat, listing.lng, index);
+                });
+                
+                markers.push(marker);
+            });
+            
+            if (markers.length > 0) {
+                const group = new L.featureGroup(markers);
+                map.fitBounds(group.getBounds().pad(0.1));
+            }
+        }
+        
+        // Reset all markers to default state
+        function resetAllMarkers() {
+            markers.forEach(marker => {
+                marker.setIcon(defaultIcon);
+                marker.setOpacity(0.8);
+            });
+        }
+        
+        // Clear all markers from map
+        function clearMarkers() {
+            markers.forEach(marker => map.removeLayer(marker));
+            markers = [];
+        }
+        
+        // Find nearby listings
+        function findNearbyListings(lat, lng, clickedIndex) {
+            const nearbyListings = [];
+            
+            listings.forEach((listing, index) => {
+                if (index === clickedIndex) return;
+                
+                const distance = calculateDistance(lat, lng, listing.lat, listing.lng);
+                if (distance <= 0.5) {
+                    nearbyListings.push({
+                        ...listing,
+                        distance: distance.toFixed(2)
+                    });
+                    // Change to star icon and full opacity
+                    markers[index].setIcon(starIcon);
+                    markers[index].setOpacity(1.0);
+                }
+            });
+            
+            displayNearbyListings(nearbyListings);
+        }
+        
+        // Calculate distance between two points
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 3958.8; // Earth's radius in miles
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+                      Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+        }
+        
+        // Display nearby listings
+        function displayNearbyListings(nearbyListings) {
+            const container = document.getElementById('nearbyContainer');
+            container.innerHTML = '';
+            
+            if (nearbyListings.length === 0) {
+                container.innerHTML = '<p>No listings found within 0.5 miles.</p>';
+            } else {
+                nearbyListings.forEach(listing => {
+                    const div = document.createElement('div');
+                    div.className = 'listing';
+                    
+                    let html = `<strong>${listing.address}</strong> (${listing.distance} miles)`;
+                    if (listing.price) html += `<br>Price: ${listing.price}`;
+                    if (listing.bedrooms) html += `<br>Bedrooms: ${listing.bedrooms}`;
+                    if (listing.bathrooms) html += `<br>Bathrooms: ${listing.bathrooms}`;
+                    if (listing.propertyType) html += `<br>Type: ${listing.propertyType}`;
+                    if (listing.neighborhood) html += `<br>Neighborhood: ${listing.neighborhood}`;
+                    if (listing.url) html += `<br><a href="${listing.url}" target="_blank">View Listing</a>`;
+                    
+                    div.innerHTML = html;
+                    container.appendChild(div);
+                });
+            }
+            
+            document.getElementById('nearbyPanel').classList.remove('hidden');
+        }
+        
+        // Initialize map when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            initMap();
+            
+            // Demo listing
+            const darienListing = {
+                address: "815 Poplar St, Philadelphia, PA 19123",
+                lat: 39.9653,
+                lng: -75.1528,
+                price: "$1,904 - $3,621",
+                bedrooms: "1-3",
+                bathrooms: "1-2",
+                propertyType: "Apartment",
+                parking: "Surface parking lot",
+                neighborhood: "Northern Liberties",
+                url: "https://www.zillow.com/apartments/philadelphia-pa/the-darien/CfDr9m/"
+            };
+            
+            listings = [darienListing];
+            updateListingsDisplay();
+            addMarkersToMap();
+        });
+    </script>
+</body>
+</html>
